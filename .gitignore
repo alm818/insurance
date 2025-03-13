@@ -1,1 +1,8 @@
 data
+.DS_Store
+.conda
+.ipynb_checkpoints
+*.bak
+*.tmp
+*.swp
+.vscode/
