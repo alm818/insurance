@@ -1,0 +1,11 @@
+[setup]
+rebuild_env = false
+rebuild_final_data = false
+
+[data]
+start_year = 1978
+end_year = 2024
+time_horizon = 10
+seed = 42
+
+[end]
