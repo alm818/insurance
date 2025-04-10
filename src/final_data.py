@@ -1,4 +1,4 @@
-import json
+import json, os
 import pandas as pd
 import numpy as np
 import configparser
@@ -12,88 +12,87 @@ from rpy2.robjects import numpy2ri
 numpy2ri.activate()
 tweedie = importr("tweedie")
 
+folder = "final_data"
+policy_file = os.path.join(folder, "policy.csv")
+claim_file = os.path.join(folder, "claim.csv")
+per_county_file = os.path.join(folder, "per_county.csv")
+per_state_file = os.path.join(folder, "per_state.csv")
+
 def aggregate_data():
-    # Define file path and chunk size
-    policy_file = "data/FimaNfipPolicies.csv"
     chunk_size = 100000  # Reads 100,000 rows at a time
     
     # Create an empty DataFrame to store cumulative results
     aggregated_results = pd.DataFrame()
-    
     # Process file in chunks
-    for df in tqdm(pd.read_csv(policy_file, chunksize=chunk_size, low_memory=False), total=40840461 // chunk_size + 1, desc="Processing Chunks"):
+    for df in tqdm(pd.read_csv("data/FimaNfipPolicies.csv", chunksize=chunk_size, low_memory=False), total=69489458 // chunk_size + 1, desc="Processing Chunks"):
         # Convert policyEffectiveDate to datetime and extract the year
         df['policyEffectiveDate'] = pd.to_datetime(df['policyEffectiveDate'], errors='coerce')
-        df['Year'] = df['policyEffectiveDate'].dt.year
-        df['propertyState'] = df['propertyState'].str.upper()
-    
+        df['year'] = df['policyEffectiveDate'].dt.year
+        df['state'] = df['propertyState'].str.upper()
+        df = df.rename(columns={'countyCode': 'county'})
+        
         # Group by state, county, and year, then aggregate total premium and policy count
-        chunk_aggregated = df.groupby(['propertyState', 'countyCode', 'Year']).agg(
-            totalPremium=('totalInsurancePremiumOfThePolicy', 'sum'),
-            totalPolicies=('policyCount', 'sum')
+        chunk_aggregated = df.groupby(['state', 'county', 'year']).agg(
+            policy_amount=('totalInsurancePremiumOfThePolicy', 'sum'),
+            policy_count=('policyCount', 'sum')
         ).reset_index()
     
         # Append chunk results to aggregated_results
         aggregated_results = pd.concat([aggregated_results, chunk_aggregated], ignore_index=True)
     
     # Final aggregation across all chunks
-    final_aggregated_data = aggregated_results.groupby(['propertyState', 'countyCode', 'Year']).agg(
-        totalPremium=('totalPremium', 'sum'),
-        totalPolicies=('totalPolicies', 'sum')
+    final_aggregated_data = aggregated_results.groupby(['state', 'county', 'year']).agg(
+        policy_amount=('policy_amount', 'sum'),
+        policy_count=('policy_count', 'sum')
     ).reset_index()
     
     # Fill missing values with 0
     final_aggregated_data.fillna(0, inplace=True)
     
     # Save the result to CSV
-    final_aggregated_data.to_csv("final_data/policy_per_county.csv", index=False)
+    final_aggregated_data.to_csv(policy_file, index=False)
     
     # Display the first few rows
     print(final_aggregated_data.head())
     print(final_aggregated_data.shape)
-    
-    claim_file = "data/FimaNfipClaims.csv"
+
     aggregated_results = pd.DataFrame()
     
     # Process file in chunks with progress bar
-    for df in tqdm(pd.read_csv(claim_file, chunksize=chunk_size, low_memory=False), 
-                   total=2706996 // chunk_size + 1, desc="Processing Claims Chunks"):
+    for df in tqdm(pd.read_csv("data/FimaNfipClaims.csv", chunksize=chunk_size, low_memory=False), 
+                   total=2709121 // chunk_size + 1, desc="Processing Claims Chunks"):
     
         # Convert dateOfLoss to datetime and extract the year
         df['dateOfLoss'] = pd.to_datetime(df['dateOfLoss'], errors='coerce')
-        df['Year'] = df['dateOfLoss'].dt.year
+        df['year'] = df['dateOfLoss'].dt.year
         df['state'] = df['state'].str.upper()
-    
+        df = df.rename(columns={'countyCode': 'county'})
+
         # Compute total claim payments
-        df['totalClaimsPaid'] = df[['amountPaidOnBuildingClaim', 
+        df['claim_amount'] = df[['amountPaidOnBuildingClaim', 
                                     'amountPaidOnContentsClaim', 
                                     'amountPaidOnIncreasedCostOfComplianceClaim']].sum(axis=1, min_count=1)
     
-        # Compute total actual loss
-        df['totalActualLoss'] = df[['buildingDamageAmount', 'contentsDamageAmount']].sum(axis=1, min_count=1)
-    
         # Aggregate by state, county, and year
-        chunk_aggregated = df.groupby(['state', 'countyCode', 'Year']).agg(
-            totalClaimsPaid=('totalClaimsPaid', 'sum'),
-            totalActualLoss=('totalActualLoss', 'sum'),
-            numberOfClaims=('id', 'count')  # Counting unique claim IDs
+        chunk_aggregated = df.groupby(['state', 'county', 'year']).agg(
+            claim_amount=('claim_amount', 'sum'),
+            claim_count=('id', 'count')  # Counting unique claim IDs
         ).reset_index()
     
         # Append chunk results to aggregated_results
         aggregated_results = pd.concat([aggregated_results, chunk_aggregated], ignore_index=True)
     
     # Final aggregation across all chunks
-    final_aggregated_data = aggregated_results.groupby(['state', 'countyCode', 'Year']).agg(
-        totalClaimsPaid=('totalClaimsPaid', 'sum'),
-        totalActualLoss=('totalActualLoss', 'sum'),
-        numberOfClaims=('numberOfClaims', 'sum')
+    final_aggregated_data = aggregated_results.groupby(['state', 'county', 'year']).agg(
+        claim_amount=('claim_amount', 'sum'),
+        claim_count=('claim_count', 'sum')
     ).reset_index()
     
     # Fill missing values with 0
     final_aggregated_data.fillna(0, inplace=True)
     
     # Save the result to CSV
-    final_aggregated_data.to_csv("final_data/claim_per_county.csv", index=False)
+    final_aggregated_data.to_csv(claim_file, index=False)
     
     # Display the first few rows
     print(final_aggregated_data.head())
@@ -184,80 +183,75 @@ def mle_estimates(c, l):
     
     return lambda_hat, alpha_hat, theta_hat
 
-def marginalize_data():
-    claim_file_path = "final_data/claim_per_county.csv"
-    df = pd.read_csv(claim_file_path)
+def per_county_data():
+    df = pd.read_csv(claim_file)
     config = configparser.ConfigParser()
     config.read('config.txt')
     years = list(range(int(config['data']['start_year']), int(config['data']['end_year'])))
     T = int(config['data']['time_horizon'])
     county_data = {}
     
-    for (state, county), group in df.groupby(["state", "countyCode"]):
+    for (state, county), group in df.groupby(["state", "county"]):
         claim_counts = {year: 0 for year in years}
-        loss = {year: 0 for year in years}
+        claim_amounts = {year: 0 for year in years}
         
         for _, row in group.iterrows():
-            year = row["Year"]
+            year = row["year"]
             if year in claim_counts:
-                claim_counts[year] = row["numberOfClaims"]
-                loss[year] = row["totalClaimsPaid"]
-        claim_counts = np.array([claim_counts[year] for year in years])[:-T]
-        loss = np.array([loss[year] for year in years])
-        lambda_hat, alpha_hat, theta_hat = mle_estimates(claim_counts, loss[:-T])
+                claim_counts[year] = row["claim_count"]
+                claim_amounts[year] = row["claim_amount"]
+        claim_counts = np.array([claim_counts[year] for year in years])
+        claim_amounts = np.array([claim_amounts[year] for year in years])
+        lambda_hat, alpha_hat, theta_hat = mle_estimates(claim_counts[:-T], claim_amounts[:-T])
         if lambda_hat == 0:
             p, mu, phi = np.nan, 0, 0
         else:
             p, mu = (2+alpha_hat)/(1+alpha_hat), lambda_hat*alpha_hat*theta_hat
             phi = (1+alpha_hat) * lambda_hat**(1-p) * alpha_hat**(1-p) * theta_hat**(2-p)
         county_data[(state, county)] = {
-            "claim_counts": json.dumps(claim_counts.tolist()),
-            "claim_loss": json.dumps(loss[:-T].tolist()),
-            "test_loss": json.dumps(loss[-T:].tolist()),
+            "train_claim_count": json.dumps(claim_counts[:-T].tolist()),
+            "train_claim_amount": json.dumps(claim_amounts[:-T].tolist()),
+            "test_claim_amount": json.dumps(claim_amounts[-T:].tolist()),
             "p": p,
             "mu": mu,
             "phi": phi
         }
     
     df = pd.DataFrame.from_dict(county_data, orient="index")
-    df.index = pd.MultiIndex.from_tuples(df.index, names=["State", "County"])
+    df.index = pd.MultiIndex.from_tuples(df.index, names=["state", "county"])
     df.reset_index(inplace=True)
-    
-    csv_filename = "final_data/marginal_per_county.csv"
-    df.to_csv(csv_filename, index=False)
+    df.to_csv(per_county_file, index=False)
     
     print(df.head())
     print(df.shape)
 
-def correlate_data():
+def per_state_data():
     eps = 1e-6
-    marginal_file_path = "final_data/marginal_per_county.csv"
-    df = pd.read_csv(marginal_file_path)
-    df['claim_loss'] = df['claim_loss'].apply(lambda x: np.array(eval(x)) if isinstance(x, str) else np.array(x))
-    df = df[df['claim_loss'].apply(np.var) > 0]
+    df = pd.read_csv(per_county_file)
+    df['train_claim_amount'] = df['train_claim_amount'].apply(lambda x: np.array(eval(x)) if isinstance(x, str) else np.array(x))
+    df = df[df['train_claim_amount'].apply(np.var) > 0]
     state_data = {}
-    for state, group in df.groupby("State"):
-        group_sorted = group.sort_values(by="County")
-        claim_loss_matrix = np.array([cl for cl in group_sorted["claim_loss"]])
+    for state, group in df.groupby("state"):
+        group_sorted = group.sort_values(by="county")
+        claim_amount_matrix = np.array([cl for cl in group_sorted["train_claim_amount"]])
         tweedie_matrix = group_sorted[["p", "mu", "phi"]].to_numpy()
-        cdf_matrix = np.empty_like(claim_loss_matrix)
+        cdf_matrix = np.empty_like(claim_amount_matrix)
         for i, tw in enumerate(tweedie_matrix):
-            cdf_matrix[i] = tweedie.ptweedie(ro.FloatVector(claim_loss_matrix[i]), power=tw[0], mu=tw[1], phi=tw[2])
+            cdf_matrix[i] = tweedie.ptweedie(ro.FloatVector(claim_amount_matrix[i]), power=tw[0], mu=tw[1], phi=tw[2])
         cdf_matrix = np.clip(cdf_matrix, eps, 1 - eps)
         z = norm.ppf(cdf_matrix)
         corr_matrix = np.corrcoef(z)
         state_data[state] = {
             "state": state,
-            "counties": json.dumps(list(group_sorted['County'])),
+            "counties": json.dumps(list(group_sorted['county'])),
             "correlation": json.dumps(corr_matrix.tolist())
         }
     df = pd.DataFrame.from_dict(state_data, orient="index")
-    csv_filename = "final_data/correlation_per_state.csv"
-    df.to_csv(csv_filename, index=False)
+    df.to_csv(per_state_file, index=False)
     print(df.head())
     print(df.shape)
     
 if __name__ == "__main__":
     aggregate_data()
-    marginalize_data()
-    correlate_data()
+    per_county_data()
+    per_state_data()
